@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Geschichte erleben – Blaue Marker + Hände v4</title>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;font-family:system-ui,sans-serif}
+#video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
+#work{display:none}
+#ui{position:fixed;inset:0;pointer-events:none}
+.marker{position:absolute;border:5px solid #fff;border-radius:50%;box-sizing:border-box;box-shadow:0 0 18px #08f,0 0 35px #08f;pointer-events:auto;transform:translate(-50%,-50%);transition:transform .12s,box-shadow .12s,border-color .12s}
+.marker.pointed{border-color:#ffe600;box-shadow:0 0 20px #ffe600,0 0 45px #ffe600;transform:translate(-50%,-50%) scale(1.18)}
+#finger{position:absolute;width:22px;height:22px;border:4px solid #fff;border-radius:50%;background:#08f;transform:translate(-50%,-50%);display:none;box-shadow:0 0 15px #08f;pointer-events:none}
+#top,#status{position:fixed;left:12px;right:12px;background:#000b;color:#fff;padding:10px;border-radius:12px;text-align:center;z-index:3}
+#top{top:12px}.hidden{display:none!important}#status{bottom:12px;font-size:14px}
+.card{position:fixed;z-index:10;left:50%;top:50%;transform:translate(-50%,-50%);background:#10151f;color:#fff;padding:24px;border-radius:20px;width:min(340px,82vw);text-align:center;box-shadow:0 12px 45px #000b;pointer-events:auto}
+button{border:0;border-radius:12px;padding:13px 18px;font-size:16px;font-weight:700}
+#start{background:#1677ee;color:#fff}
+</style>
+</head>
+<body>
+<video id="video" autoplay playsinline muted></video>
+<canvas id="work"></canvas>
+<div id="ui"></div>
+<div id="finger"></div>
+<div id="top" class="hidden">🔵 Marker · ☝️ Hand · korrekte Cover-Koordinaten</div>
+<div id="status">Bereit</div>
+<div id="startCard" class="card">
+<h2>🔵 + ☝️</h2>
+<p>Die Kamera erkennt mehrere blaue Kreise. Zeige mit dem Zeigefinger auf einen Kreis.</p>
+<button id="start">Kamera starten</button>
+</div>
+<script>
+const video=document.getElementById('video');
+const canvas=document.getElementById('work');
+const ctx=canvas.getContext('2d',{willReadFrequently:true});
+const ui=document.getElementById('ui');
+const finger=document.getElementById('finger');
+const status=document.getElementById('status');
+let stream=null,running=false,markers=[],fingerPos=null,handBusy=false,hands=null;
+
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+/*
+ * Wichtig: Das Kamerabild wird per CSS mit object-fit:cover dargestellt.
+ * Dadurch wird das Video nicht einfach auf die Bildschirmgröße gestreckt,
+ * sondern an den Seiten (oder oben/unten) beschnitten. Genau das hat bisher
+ * die Marker- und Fingerposition verschoben.
+ *
+ * Diese Funktion bildet Koordinaten aus dem echten Kamerabild korrekt auf
+ * die sichtbare Video-Fläche ab.
+ */
+function videoPointToScreen(nx,ny){
+  const vw=video.videoWidth, vh=video.videoHeight;
+  const sw=innerWidth, sh=innerHeight;
+  if(!vw||!vh)return {x:nx*sw,y:ny*sh};
+
+  const scale=Math.max(sw/vw,sh/vh); // object-fit: cover
+  const rw=vw*scale, rh=vh*scale;
+  const cropX=(rw-sw)/2;
+  const cropY=(rh-sh)/2;
+  return {
+    x:nx*rw-cropX,
+    y:ny*rh-cropY
+  };
+}
+
+async function startCamera(){
+ if(!window.isSecureContext)throw new Error('Bitte über HTTPS öffnen.');
+ stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});
+ video.srcObject=stream;
+ await video.play();
+}
+
+document.getElementById('start').onclick=async()=>{
+ try{
+  await startCamera();
+  document.getElementById('startCard').classList.add('hidden');
+  document.getElementById('top').classList.remove('hidden');
+  running=true;
+  status.textContent='Kamera aktiv – suche blaue Marker und Hände …';
+  startHands();
+  requestAnimationFrame(scanMarkers);
+ }catch(e){status.textContent='Kamera-Fehler: '+(e.name||'')+' – '+(e.message||e)}
+};
+
+function startHands(){
+ hands=new Hands({locateFile:file=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+ hands.setOptions({maxNumHands:2,modelComplexity:1,minDetectionConfidence:.55,minTrackingConfidence:.55});
+ hands.onResults(results=>{
+  if(results.multiHandLandmarks&&results.multiHandLandmarks.length){
+   // Landmark 8 = Spitze des Zeigefingers.
+   const p=results.multiHandLandmarks[0][8];
+   fingerPos=videoPointToScreen(p.x,p.y);
+   finger.style.display='block';
+   finger.style.left=fingerPos.x+'px';
+   finger.style.top=fingerPos.y+'px';
+  }else{
+   fingerPos=null;
+   finger.style.display='none';
+  }
+  updatePointing();
+ });
+ const loop=async()=>{
+  if(!running)return;
+  if(video.readyState>=2&&!handBusy){
+   handBusy=true;
+   try{await hands.send({image:video})}catch(e){}
+   handBusy=false;
+  }
+  requestAnimationFrame(loop);
+ };
+ loop();
+}
+
+/*
+ * Marker-Erkennung:
+ * Statt alle blauen Pixel des Bildes zu einer Fläche zusammenzufassen,
+ * werden einzelne zusammenhängende blaue Bereiche gefunden.
+ * Dadurch können mehrere Marker gleichzeitig erkannt werden.
+ */
+function scanMarkers(){
+ if(!running)return;
+ if(video.readyState>=2&&video.videoWidth){
+  // Wir verarbeiten das Kamerabild in moderater Auflösung. Wichtig:
+  // Die Koordinaten bleiben normale Video-Koordinaten und werden erst
+  // ganz am Ende mit videoPointToScreen() auf das Cover-Bild gelegt.
+  const W=480;
+  const H=Math.max(270,Math.round(video.videoHeight*W/video.videoWidth));
+  canvas.width=W;canvas.height=H;
+  ctx.drawImage(video,0,0,W,H);
+  const data=ctx.getImageData(0,0,W,H).data;
+  const cell=3;
+  const gw=Math.floor(W/cell),gh=Math.floor(H/cell);
+  const blue=new Uint8Array(gw*gh);
+
+  // Blau-Maske. Etwas gezielter als vorher, damit graue/blaue Kleidung
+  // und zufällige Bildbereiche weniger leicht als Marker gelten.
+  for(let gy=0;gy<gh;gy++){
+   for(let gx=0;gx<gw;gx++){
+    let hits=0,samples=0;
+    const x0=gx*cell,y0=gy*cell;
+    for(let yy=0;yy<cell;yy++){
+     for(let xx=0;xx<cell;xx++){
+      const x=x0+xx,y=y0+yy;
+      if(x>=W||y>=H)continue;
+      const i=(y*W+x)*4;
+      const r=data[i],g=data[i+1],b=data[i+2];
+      const max=Math.max(r,g,b),min=Math.min(r,g,b);
+      const sat=max?((max-min)/max):0;
+      // Cyan/Blau mit deutlichem Abstand zu Rot und etwas Abstand zu Grün.
+      if(b>85 && b>r*1.28 && b>g*1.04 && sat>.24)hits++;
+      samples++;
+     }
+    }
+    if(hits>=2 && hits/samples>=.22)blue[gy*gw+gx]=1;
+   }
+  }
+
+  const seen=new Uint8Array(blue.length);
+  const comps=[];
+
+  for(let sy=0;sy<gh;sy++)for(let sx=0;sx<gw;sx++){
+   const first=sy*gw+sx;
+   if(!blue[first]||seen[first])continue;
+
+   const queue=[first];seen[first]=1;
+   let count=0,minX=sx,maxX=sx,minY=sy,maxY=sy,sumX=0,sumY=0;
+   const boundary=[];
+
+   for(let qi=0;qi<queue.length;qi++){
+    const id=queue[qi],y=Math.floor(id/gw),x=id-y*gw;
+    count++;sumX+=x;sumY+=y;
+    minX=Math.min(minX,x);maxX=Math.max(maxX,x);
+    minY=Math.min(minY,y);maxY=Math.max(maxY,y);
+
+    const left=x>0?blue[id-1]:0;
+    const right=x<gw-1?blue[id+1]:0;
+    const up=y>0?blue[id-gw]:0;
+    const down=y<gh-1?blue[id+gw]:0;
+    if(!left||!right||!up||!down)boundary.push([x,y]);
+
+    if(x>0){const n=id-1;if(blue[n]&&!seen[n]){seen[n]=1;queue.push(n)}}
+    if(x<gw-1){const n=id+1;if(blue[n]&&!seen[n]){seen[n]=1;queue.push(n)}}
+    if(y>0){const n=id-gw;if(blue[n]&&!seen[n]){seen[n]=1;queue.push(n)}}
+    if(y<gh-1){const n=id+gw;if(blue[n]&&!seen[n]){seen[n]=1;queue.push(n)}}
+   }
+
+   const bw=(maxX-minX+1)*cell;
+   const bh=(maxY-minY+1)*cell;
+   const boxArea=bw*bh;
+   const fill=count/((maxX-minX+1)*(maxY-minY+1));
+   const ratio=bw/bh;
+
+   if(count<18||bw<18||bh<18||boxArea<320||ratio<.55||ratio>1.8||fill<.42)continue;
+
+   // Ein echter Marker soll ungefähr kreis-/ellipsenförmig sein.
+   // Dafür prüfen wir die Randpunkte gegen eine Ellipse im Bounding-Box-
+   // Koordinatensystem. Rechteckige blaue Flächen bekommen dadurch einen
+   // deutlich schlechteren Shape-Score.
+   const cx=(minX+maxX)/2,cy=(minY+maxY)/2;
+   const rx=Math.max(1,(maxX-minX+1)/2),ry=Math.max(1,(maxY-minY+1)/2);
+   let good=0,shapeSum=0;
+   for(const [x,y] of boundary){
+    const rr=Math.hypot((x-cx)/rx,(y-cy)/ry);
+    const d=Math.abs(rr-1);
+    if(d<.28)good++;
+    shapeSum+=Math.max(0,1-Math.min(1,d/0.55));
+   }
+   const shape=boundary.length?shapeSum/boundary.length:0;
+   const boundaryRatio=boundary.length?good/boundary.length:0;
+
+   // Kreis-/Ellipsenform plus ausreichende Füllung.
+   if(shape<.48 || boundaryRatio<.38)continue;
+
+   const nx=(sumX/count + .5)/gw;
+   const ny=(sumY/count + .5)/gh;
+   const pos=videoPointToScreen(nx,ny);
+
+   const coverScale=Math.max(innerWidth/video.videoWidth,innerHeight/video.videoHeight);
+   const sourceW=bw*(video.videoWidth/W)*coverScale;
+   const sourceH=bh*(video.videoHeight/H)*coverScale;
+   const size=clamp(Math.max(sourceW,sourceH),50,190);
+
+   // Score hilft dabei, zufällige blaue Flächen hinter einem echten Kreis
+   // zurückzustellen.
+   const score=shape*.7+boundaryRatio*.2+Math.min(1,fill/.8)*.1;
+   comps.push({x:pos.x,y:pos.y,size,area:boxArea,score});
+  }
+
+  // Beste kreisförmige Kandidaten zuerst. Sehr nahe Kandidaten werden
+  // zusammengelegt, falls ein Marker durch die Segmentierung geteilt wurde.
+  comps.sort((a,b)=>b.score-a.score);
+  const result=[];
+  for(const c of comps){
+   const existing=result.find(m=>Math.hypot(m.x-c.x,m.y-c.y)<Math.max(30,c.size*.42));
+   if(existing){
+    if(c.score>existing.score){existing.x=c.x;existing.y=c.y;existing.size=Math.max(existing.size,c.size);existing.score=c.score;}
+   }else result.push(c);
+  }
+
+  markers=result.slice(0,12);
+  renderMarkers();
+  updatePointing();
+ }
+ requestAnimationFrame(scanMarkers);
+}
+
+function renderMarkers(){
+ ui.querySelectorAll('.marker').forEach(e=>e.remove());
+ markers.forEach((m,i)=>{
+  const e=document.createElement('div');e.className='marker';e.dataset.i=i;
+  e.style.left=m.x+'px';e.style.top=m.y+'px';e.style.width=m.size+'px';e.style.height=m.size+'px';
+  e.onclick=()=>showCard(i);
+  ui.appendChild(e);
+ });
+}
+
+function updatePointing(){
+ ui.querySelectorAll('.marker').forEach((e,i)=>{
+  const m=markers[i];
+  const distance=fingerPos?Math.hypot(fingerPos.x-m.x,fingerPos.y-m.y):Infinity;
+  const hit=distance<Math.max(55,m.size*.48);
+  e.classList.toggle('pointed',hit);
+  if(hit)status.textContent='☝️ Du zeigst auf Marker '+(i+1);
+ });
+ if(!fingerPos&&markers.length)status.textContent='🔵 '+markers.length+' Marker erkannt · ☝️ Hand suchen …';
+}
+
+function showCard(i){
+ const c=document.createElement('div');c.className='card';
+ c.innerHTML=`<h2>🏛️ Historischer Punkt ${i+1}</h2><p>Dieser blaue Marker wurde erkannt. Hier können später historische Texte, Bilder, Quellen, Aufgaben oder 3D-Inhalte erscheinen.</p><button>Schließen</button>`;
+ c.querySelector('button').onclick=()=>c.remove();document.body.appendChild(c);
+}
+
+addEventListener('beforeunload',()=>{if(stream)stream.getTracks().forEach(t=>t.stop())});
+</script>
+</body>
+</html>
