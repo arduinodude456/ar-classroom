@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Geschichte erleben – WebXR AR</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#111;font-family:system-ui,sans-serif}
+canvas{display:block}
+#start{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(#111a,#111);z-index:10}
+.card{max-width:430px;margin:20px;padding:28px;border-radius:24px;background:#ffffffee;color:#111;box-shadow:0 10px 40px #0008;text-align:center}
+h1{margin-top:0}
+button{border:0;border-radius:16px;padding:16px 22px;font-size:18px;font-weight:700;background:#222;color:#fff}
+#info{position:fixed;left:16px;right:16px;bottom:16px;padding:14px 16px;border-radius:16px;background:#111c;color:white;z-index:5;pointer-events:none}
+#error{color:#b00020;margin-top:14px;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<div id="start">
+  <div class="card">
+    <h1>🏛️ Geschichte erleben</h1>
+    <p>Eine minimale WebXR-AR-Demo.</p>
+    <p>Starte AR und richte die Kamera auf eine Fläche. Danach erscheint ein historisches Objekt.</p>
+    <button id="startButton">AR starten</button>
+    <div id="status">Prüfe WebXR …</div>
+    <div id="error"></div>
+  </div>
+</div>
+<div id="info" hidden>Tippe auf die Fläche, um das Objekt zu platzieren.</div>
+
+<script type="module">
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+
+const start = document.getElementById("start");
+const button = document.getElementById("startButton");
+const status = document.getElementById("status");
+const errorBox = document.getElementById("error");
+const info = document.getElementById("info");
+
+let renderer, scene, camera;
+let controller, reticle, hitTestSource = null, viewerSpace = null;
+let placed = false;
+let object = null;
+
+async function checkXR(){
+  if(!navigator.xr){
+    status.textContent = "❌ navigator.xr ist nicht vorhanden.";
+    button.disabled = true;
+    return;
+  }
+  try{
+    const ok = await navigator.xr.isSessionSupported("immersive-ar");
+    status.textContent = ok ? "✅ Immersive AR verfügbar." : "❌ Immersive AR nicht verfügbar.";
+    button.disabled = !ok;
+  }catch(e){
+    status.textContent = "❌ WebXR-Prüfung fehlgeschlagen.";
+    errorBox.textContent = e.name + ": " + e.message;
+    button.disabled = true;
+  }
+}
+
+function makeHistoricalObject(){
+  const group = new THREE.Group();
+
+  const pedestal = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.22,0.28,0.12,32),
+    new THREE.MeshStandardMaterial({color:0x777777,roughness:.8})
+  );
+  group.add(pedestal);
+
+  const column = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.09,0.11,0.65,24),
+    new THREE.MeshStandardMaterial({color:0xd9c7a0,roughness:.7})
+  );
+  column.position.y=.38;
+  group.add(column);
+
+  const top = new THREE.Mesh(
+    new THREE.BoxGeometry(.28,.10,.28),
+    new THREE.MeshStandardMaterial({color:0xd9c7a0,roughness:.7})
+  );
+  top.position.y=.73;
+  group.add(top);
+
+  const plaque = new THREE.Mesh(
+    new THREE.PlaneGeometry(.75,.34),
+    new THREE.MeshBasicMaterial({color:0x1d2633,side:THREE.DoubleSide})
+  );
+  plaque.position.set(0,.96,0);
+  plaque.rotation.x=-Math.PI/2;
+  group.add(plaque);
+
+  return group;
+}
+
+function setupScene(){
+  scene = new THREE.Scene();
+
+  camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, .01, 20);
+
+  renderer = new THREE.WebGLRenderer({
+    antialias:true,
+    alpha:true,
+    powerPreference:"high-performance"
+  });
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  renderer.setSize(innerWidth,innerHeight);
+  renderer.xr.enabled = true;
+  renderer.xr.setReferenceSpaceType("local");
+  document.body.appendChild(renderer.domElement);
+
+  scene.add(new THREE.HemisphereLight(0xffffff,0x555555,2));
+
+  reticle = new THREE.Mesh(
+    new THREE.RingGeometry(.08,.10,32).rotateX(-Math.PI/2),
+    new THREE.MeshBasicMaterial({color:0x00ff88})
+  );
+  reticle.matrixAutoUpdate=false;
+  reticle.visible=false;
+  scene.add(reticle);
+
+  controller = renderer.xr.getController(0);
+  controller.addEventListener("select", onSelect);
+  scene.add(controller);
+
+  window.addEventListener("resize",()=>{
+    camera.aspect=innerWidth/innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth,innerHeight);
+  });
+}
+
+function onSelect(){
+  if(placed || !reticle.visible) return;
+
+  object = makeHistoricalObject();
+  object.position.setFromMatrixPosition(reticle.matrix);
+  object.quaternion.setFromRotationMatrix(reticle.matrix);
+  scene.add(object);
+  placed=true;
+  info.textContent="🏛️ Antike: Dieses einfache 3D-Objekt ist deine erste historische AR-Station.";
+}
+
+async function startAR(){
+  button.disabled=true;
+  errorBox.textContent="";
+  status.textContent="Starte AR …";
+
+  try{
+    /*
+      Absichtlich minimale Session-Konfiguration:
+      Erst wenn die reine immersive-ar-Session funktioniert,
+      wird Hit-Test als optionales Feature angefordert.
+    */
+    const session = await navigator.xr.requestSession("immersive-ar", {
+      optionalFeatures:["hit-test","local-floor"]
+    });
+
+    renderer.xr.setSession(session);
+    start.style.display="none";
+    info.hidden=false;
+
+    try{
+      viewerSpace = await session.requestReferenceSpace("viewer");
+      hitTestSource = await session.requestHitTestSource({space:viewerSpace});
+    }catch(e){
+      console.warn("Hit-Test nicht verfügbar:",e);
+      hitTestSource=null;
+    }
+
+    session.addEventListener("end",()=>{
+      hitTestSource=null;
+      viewerSpace=null;
+      placed=false;
+      if(object){scene.remove(object);object=null}
+      start.style.display="flex";
+      button.disabled=false;
+      info.hidden=true;
+      status.textContent="AR beendet.";
+    });
+
+    renderer.setAnimationLoop((time,frame)=>{
+      if(frame && hitTestSource){
+        const refSpace=renderer.xr.getReferenceSpace();
+        const results=frame.getHitTestResults(hitTestSource);
+        if(results.length){
+          const pose=results[0].getPose(refSpace);
+          if(pose){
+            reticle.visible=!placed;
+            reticle.matrix.fromArray(pose.transform.matrix);
+          }
+        }else{
+          reticle.visible=false;
+        }
+      }else{
+        reticle.visible=!placed;
+      }
+
+      if(object) object.rotation.y += 0.003;
+      renderer.render(scene,camera);
+    });
+
+  }catch(e){
+    status.textContent="❌ AR konnte nicht gestartet werden.";
+    errorBox.textContent =
+      "Fehler: " + (e.name||"Unbekannt") + "\n" +
+      (e.message||String(e));
+    button.disabled=false;
+    console.error(e);
+  }
+}
+
+button.addEventListener("click",startAR);
+setupScene();
+checkXR();
+</script>
+</body>
+</html>
