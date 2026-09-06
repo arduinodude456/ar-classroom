@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Geschichte erleben – Blaue Marker + Hände</title>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;font-family:system-ui,sans-serif}
+#video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover}
+#work{display:none}#ui{position:fixed;inset:0;pointer-events:none}
+.marker{position:absolute;border:5px solid #fff;border-radius:50%;box-sizing:border-box;box-shadow:0 0 18px #08f,0 0 35px #08f;pointer-events:auto;transform:translate(-50%,-50%);transition:.12s}
+.marker.pointed{border-color:#ffe600;box-shadow:0 0 20px #ffe600,0 0 45px #ffe600;transform:translate(-50%,-50%) scale(1.18)}
+#finger{position:absolute;width:22px;height:22px;border:4px solid #fff;border-radius:50%;background:#08f;transform:translate(-50%,-50%);display:none;box-shadow:0 0 15px #08f}
+#top,#status{position:fixed;left:12px;right:12px;background:#000b;color:#fff;padding:10px;border-radius:12px;text-align:center;z-index:3}#top{top:12px}.hidden{display:none!important}#status{bottom:12px;font-size:14px}
+.card{position:fixed;z-index:10;left:50%;top:50%;transform:translate(-50%,-50%);background:#10151f;color:#fff;padding:24px;border-radius:20px;width:min(340px,82vw);text-align:center;box-shadow:0 12px 45px #000b;pointer-events:auto}
+button{border:0;border-radius:12px;padding:13px 18px;font-size:16px;font-weight:700}#start{background:#1677ee;color:#fff}
+</style>
+</head>
+<body>
+<video id="video" autoplay playsinline muted></video><canvas id="work"></canvas><div id="ui"></div><div id="finger"></div>
+<div id="top" class="hidden">🔵 Marker · ☝️ Hand</div><div id="status">Bereit</div>
+<div id="startCard" class="card"><h2>🔵 + ☝️</h2><p>Die Kamera erkennt mehrere blaue Kreise und Hände. Zeige mit dem Zeigefinger auf einen Kreis.</p><button id="start">Kamera starten</button></div>
+<script>
+const video=document.getElementById('video'),canvas=document.getElementById('work'),ctx=canvas.getContext('2d',{willReadFrequently:true}),ui=document.getElementById('ui'),finger=document.getElementById('finger'),status=document.getElementById('status');
+let stream=null,running=false,markers=[],fingerPos=null,handBusy=false;
+document.getElementById('start').onclick=async()=>{try{if(!isSecureContext)throw new Error('Bitte über HTTPS öffnen.');stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});video.srcObject=stream;await video.play();document.getElementById('startCard').classList.add('hidden');document.getElementById('top').classList.remove('hidden');running=true;startHands();requestAnimationFrame(scan)}catch(e){status.textContent='Kamera-Fehler: '+e.name+' – '+e.message}};
+async function startHands(){
+const hands=new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
+hands.setOptions({maxNumHands:2,modelComplexity:1,minDetectionConfidence:.55,minTrackingConfidence:.55});
+hands.onResults(r=>{fingerPos=null;if(r.multiHandLandmarks?.length){const p=r.multiHandLandmarks[0][8];fingerPos={x:(1-p.x)*innerWidth,y:p.y*innerHeight};finger.style.display='block';finger.style.left=fingerPos.x+'px';finger.style.top=fingerPos.y+'px';status.textContent='☝️ Hand erkannt – suche blauen Marker'}else{finger.style.display='none';if(!markers.length)status.textContent='Suche nach blauen Kreisen und Händen …'}updatePointing()});
+const loop=async()=>{if(video.readyState>=2&&!handBusy){handBusy=true;try{await hands.send({image:video})}finally{handBusy=false}}requestAnimationFrame(loop)};loop();}
+function scan(){if(video.readyState>=2&&video.videoWidth){const w=320,h=Math.round(video.videoHeight*w/video.videoWidth);canvas.width=w;canvas.height=h;ctx.drawImage(video,0,0,w,h);const d=ctx.getImageData(0,0,w,h).data;const seen=[];for(let y=0;y<h;y+=3)for(let x=0;x<w;x+=3){const i=(y*w+x)*4,r=d[i],g=d[i+1],b=d[i+2];if(b>105&&b>r*1.28&&b>g*1.08&&b-r>30)seen.push([x,y]);}const cells=new Map(),step=14;for(const [x,y] of seen){const k=Math.floor(x/step)+','+Math.floor(y/step);cells.set(k,(cells.get(k)||0)+1)}const comps=[];for(const [k,n] of cells){if(n<2)continue;const [cx,cy]=k.split(',').map(Number);comps.push({x:(cx+.5)*step,y:(cy+.5)*step,n})}const candidates=[];for(const c of comps){let xs=[],ys=[];for(const q of comps)if(Math.hypot(q.x-c.x,q.y-c.y)<55){xs.push(q.x);ys.push(q.y)}if(xs.length>=3){const minx=Math.min(...xs),maxx=Math.max(...xs),miny=Math.min(...ys),maxy=Math.max(...ys),bw=maxx-minx,bh=maxy-miny;if(bw>15&&bh>15&&bw/bh>.45&&bw/bh<2.2)candidates.push({x:(minx+maxx)/2/w*innerWidth,y:(miny+maxy)/2/h*innerHeight,size:Math.max(50,Math.min(150,Math.max(bw/w*innerWidth,bh/h*innerHeight)))})}}markers=[];for(const c of candidates)if(!markers.some(m=>Math.hypot(m.x-c.x,m.y-c.y)<45))markers.push(c);renderMarkers();updatePointing()}requestAnimationFrame(scan)}
+function renderMarkers(){ui.querySelectorAll('.marker').forEach(e=>e.remove());markers.forEach((m,i)=>{const e=document.createElement('div');e.className='marker';e.dataset.i=i;e.style.left=m.x+'px';e.style.top=m.y+'px';e.style.width=m.size+'px';e.style.height=m.size+'px';e.onclick=()=>showCard(i);ui.appendChild(e)})}
+function updatePointing(){ui.querySelectorAll('.marker').forEach((e,i)=>{const m=markers[i],hit=fingerPos&&Math.hypot(fingerPos.x-m.x,fingerPos.y-m.y)<Math.max(70,m.size*.65);e.classList.toggle('pointed',!!hit);if(hit)status.textContent='☝️ Du zeigst auf Marker '+(i+1)})}
+function showCard(i){const c=document.createElement('div');c.className='card';c.innerHTML=`<h2>🏛️ Historischer Punkt ${i+1}</h2><p>Hier kann später der historische Inhalt dieses Markers erscheinen.</p><button>Schließen</button>`;c.querySelector('button').onclick=()=>c.remove();document.body.appendChild(c)}
+</script></body></html>
