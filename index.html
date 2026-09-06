@@ -1,0 +1,913 @@
+﻿<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+
+<title>Geschichte erleben – AR</title>
+
+<style>
+html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+    font-family: system-ui, sans-serif;
+}
+
+#start {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+
+    text-align: center;
+    padding: 30px;
+
+    color: white;
+    background:
+        radial-gradient(circle at center,
+        #26364f,
+        #070b12 70%);
+}
+
+#start h1 {
+    font-size: clamp(32px, 8vw, 60px);
+    margin: 0 0 12px;
+}
+
+#start p {
+    max-width: 600px;
+    line-height: 1.6;
+    opacity: .85;
+}
+
+#start button {
+    margin-top: 25px;
+    padding: 16px 28px;
+
+    border: 0;
+    border-radius: 16px;
+
+    font-size: 18px;
+    font-weight: bold;
+
+    background: white;
+    color: #111;
+}
+
+#info {
+    position: fixed;
+    left: 50%;
+    bottom: 25px;
+
+    width: min(90%, 600px);
+
+    transform: translate(-50%, 150%);
+
+    padding: 22px;
+
+    border-radius: 22px;
+
+    background: rgba(10,15,25,.9);
+    color: white;
+
+    backdrop-filter: blur(15px);
+
+    transition: transform .3s ease;
+
+    z-index: 20;
+
+    box-shadow: 0 20px 50px rgba(0,0,0,.4);
+}
+
+#info.visible {
+    transform: translate(-50%, 0);
+}
+
+#info h2 {
+    margin: 0 0 8px;
+}
+
+#info p {
+    margin: 0;
+    line-height: 1.55;
+}
+
+#close {
+    position: absolute;
+    right: 12px;
+    top: 10px;
+
+    width: 35px;
+    height: 35px;
+
+    border: 0;
+    border-radius: 50%;
+
+    background: rgba(255,255,255,.12);
+    color: white;
+
+    font-size: 20px;
+}
+</style>
+</head>
+
+<body>
+
+<div id="start">
+
+    <h1>🏛️ Geschichte erleben</h1>
+
+    <p>
+        Eine interaktive historische Zeitreise in Augmented Reality.
+        Starte AR, richte die Kamera auf eine freie Fläche und
+        platziere anschließend die historische Ausstellung.
+    </p>
+
+    <button id="fallback">
+        AR starten
+    </button>
+
+    <p id="status"></p>
+
+</div>
+
+
+<div id="info">
+
+    <button id="close">×</button>
+
+    <h2 id="infoTitle"></h2>
+
+    <p id="infoText"></p>
+
+</div>
+
+
+<!-- Three.js -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+
+<!-- WebXR ARButton -->
+<script type="module">
+
+import {
+    ARButton
+} from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/webxr/ARButton.js";
+
+
+/* =========================================================
+   GRUNDLEGENDE THREE.JS SZENE
+   ========================================================= */
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(
+    70,
+    window.innerWidth / window.innerHeight,
+    0.01,
+    20
+);
+
+const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    alpha: true
+});
+
+renderer.setPixelRatio(
+    Math.min(window.devicePixelRatio, 2)
+);
+
+renderer.setSize(
+    window.innerWidth,
+    window.innerHeight
+);
+
+renderer.xr.enabled = true;
+
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+document.body.appendChild(renderer.domElement);
+
+
+/* =========================================================
+   LICHT
+   ========================================================= */
+
+const ambient = new THREE.HemisphereLight(
+    0xffffff,
+    0x444444,
+    2
+);
+
+scene.add(ambient);
+
+
+/* =========================================================
+   AR BUTTON
+   ========================================================= */
+
+const arButton = ARButton.createButton(
+    renderer,
+    {
+        requiredFeatures: ["hit-test"],
+        optionalFeatures: ["dom-overlay"],
+        domOverlay: {
+            root: document.body
+        }
+    }
+);
+
+arButton.style.display = "none";
+
+document.body.appendChild(arButton);
+
+
+/* =========================================================
+   STARTBILDSCHIRM
+   ========================================================= */
+
+const start = document.getElementById("start");
+const startButton = document.getElementById("fallback");
+const status = document.getElementById("status");
+
+
+startButton.onclick = async () => {
+
+    if (!navigator.xr) {
+
+        status.textContent =
+            "❌ Dieser Browser unterstützt WebXR nicht.";
+
+        return;
+    }
+
+    const supported =
+        await navigator.xr.isSessionSupported(
+            "immersive-ar"
+        );
+
+    if (!supported) {
+
+        status.textContent =
+            "❌ Immersive AR wird nicht unterstützt.";
+
+        return;
+    }
+
+    start.style.display = "none";
+
+    arButton.click();
+};
+
+
+/* =========================================================
+   RETICLE
+   ========================================================= */
+
+const reticleGeometry =
+    new THREE.RingGeometry(
+        0.08,
+        0.1,
+        32
+    ).rotateX(-Math.PI / 2);
+
+const reticleMaterial =
+    new THREE.MeshBasicMaterial({
+        color: 0x00ffff
+    });
+
+const reticle =
+    new THREE.Mesh(
+        reticleGeometry,
+        reticleMaterial
+    );
+
+reticle.matrixAutoUpdate = false;
+reticle.visible = false;
+
+scene.add(reticle);
+
+
+/* =========================================================
+   HIT TEST
+   ========================================================= */
+
+let hitTestSource = null;
+let hitTestSourceRequested = false;
+
+
+/* =========================================================
+   AUSSTELLUNG
+   ========================================================= */
+
+let exhibition = null;
+
+
+/*
+    Historische Stationen
+*/
+
+const stations = [
+
+    {
+        title: "Das Römische Reich",
+        icon: "🏛",
+        text:
+        "Das Römische Reich entwickelte sich über viele Jahrhunderte. " +
+        "Es kontrollierte zeitweise große Teile Europas, Nordafrikas " +
+        "und des Nahen Ostens."
+    },
+
+    {
+        title: "Das Mittelalter",
+        icon: "🏰",
+        text:
+        "Das Mittelalter wird traditionell ungefähr vom 5. bis zum " +
+        "späten 15. Jahrhundert eingeordnet. Städte, Burgen, Handel " +
+        "und das Lehnswesen prägten viele Regionen Europas."
+    },
+
+    {
+        title: "Französische Revolution",
+        icon: "⚔",
+        text:
+        "1789 begann die Französische Revolution. Politische und " +
+        "gesellschaftliche Umwälzungen veränderten Frankreich und " +
+        "beeinflussten Europa nachhaltig."
+    },
+
+    {
+        title: "Industrialisierung",
+        icon: "⚙",
+        text:
+        "Die Industrialisierung veränderte Produktion, Arbeit und " +
+        "Städte grundlegend. Maschinen und Fabriken führten zu " +
+        "tiefgreifenden gesellschaftlichen Veränderungen."
+    },
+
+    {
+        title: "Historische Quellen",
+        icon: "📜",
+        text:
+        "Briefe, Urkunden, Bilder, Gegenstände und Zeitzeugenberichte " +
+        "sind wichtige Quellen für die Erforschung der Vergangenheit."
+    }
+
+];
+
+
+/* =========================================================
+   TEXTURE AUS CANVAS
+   ========================================================= */
+
+function createTextTexture(text, size = 512) {
+
+    const canvas =
+        document.createElement("canvas");
+
+    canvas.width = size;
+    canvas.height = size;
+
+    const ctx =
+        canvas.getContext("2d");
+
+    ctx.clearRect(0, 0, size, size);
+
+    ctx.fillStyle =
+        "rgba(10,15,25,0.92)";
+
+    ctx.roundRect(
+        5,
+        5,
+        size - 10,
+        size - 10,
+        35
+    );
+
+    ctx.fill();
+
+    ctx.strokeStyle =
+        "rgba(80,210,255,0.9)";
+
+    ctx.lineWidth = 6;
+
+    ctx.stroke();
+
+    ctx.fillStyle = "white";
+
+    ctx.font =
+        "bold 42px system-ui";
+
+    ctx.textAlign = "center";
+
+    ctx.fillText(
+        text.icon,
+        size / 2,
+        80
+    );
+
+    ctx.font =
+        "bold 30px system-ui";
+
+    const words =
+        text.title.split(" ");
+
+    let line = "";
+    let y = 135;
+
+    for (const word of words) {
+
+        const test =
+            line + word + " ";
+
+        if (
+            ctx.measureText(test).width >
+            size - 70
+        ) {
+
+            ctx.fillText(
+                line,
+                size / 2,
+                y
+            );
+
+            line = word + " ";
+            y += 40;
+
+        } else {
+
+            line = test;
+
+        }
+
+    }
+
+    ctx.fillText(
+        line,
+        size / 2,
+        y
+    );
+
+    ctx.font =
+        "22px system-ui";
+
+    ctx.globalAlpha = .75;
+
+    ctx.fillText(
+        "ANTIPPEN",
+        size / 2,
+        size - 45
+    );
+
+    const texture =
+        new THREE.CanvasTexture(canvas);
+
+    texture.colorSpace =
+        THREE.SRGBColorSpace;
+
+    return texture;
+}
+
+
+/* =========================================================
+   STATION ERSTELLEN
+   ========================================================= */
+
+function createStation(data) {
+
+    const geometry =
+        new THREE.PlaneGeometry(
+            0.75,
+            0.75
+        );
+
+    const material =
+        new THREE.MeshBasicMaterial({
+            map: createTextTexture(data),
+            transparent: true,
+            side: THREE.DoubleSide
+        });
+
+    const mesh =
+        new THREE.Mesh(
+            geometry,
+            material
+        );
+
+    mesh.userData = {
+        type: "station",
+        title: data.title,
+        text: data.text
+    };
+
+    return mesh;
+}
+
+
+/* =========================================================
+   AUSSTELLUNG PLATZIEREN
+   ========================================================= */
+
+function createExhibition(position) {
+
+    exhibition =
+        new THREE.Group();
+
+    exhibition.position.copy(position);
+
+
+    /*
+        Die fünf Stationen werden ringförmig
+        um den Ausgangspunkt verteilt.
+    */
+
+    const radius = 1.25;
+
+    stations.forEach((data, index) => {
+
+        const station =
+            createStation(data);
+
+        const angle =
+            (index / stations.length) *
+            Math.PI * 2;
+
+        station.position.set(
+            Math.sin(angle) * radius,
+            0.75,
+            Math.cos(angle) * radius
+        );
+
+        /*
+            Station schaut ungefähr zur Mitte
+        */
+
+        station.lookAt(
+            exhibition.position
+        );
+
+        exhibition.add(station);
+
+    });
+
+
+    /*
+        Kleine zentrale Säule
+    */
+
+    const pillar =
+        new THREE.Mesh(
+            new THREE.CylinderGeometry(
+                .12,
+                .12,
+                1.2,
+                24
+            ),
+            new THREE.MeshStandardMaterial({
+                color: 0xaaaaaa,
+                metalness: .5,
+                roughness: .5
+            })
+        );
+
+    pillar.position.y =
+        0.6;
+
+    exhibition.add(pillar);
+
+
+    scene.add(exhibition);
+}
+
+
+/* =========================================================
+   XR CONTROLLER
+   ========================================================= */
+
+const controller =
+    renderer.xr.getController(0);
+
+scene.add(controller);
+
+
+/* =========================================================
+   RAYCASTER
+   ========================================================= */
+
+const raycaster =
+    new THREE.Raycaster();
+
+
+controller.addEventListener(
+    "select",
+    () => {
+
+        /*
+            Wenn noch keine Ausstellung existiert,
+            wird die aktuelle Reticle-Position verwendet.
+        */
+
+        if (!exhibition && reticle.visible) {
+
+            const position =
+                new THREE.Vector3();
+
+            position.setFromMatrixPosition(
+                reticle.matrix
+            );
+
+            createExhibition(position);
+
+            return;
+        }
+
+
+        /*
+            Danach können die Stationen
+            angeklickt werden.
+        */
+
+        if (!exhibition)
+            return;
+
+        const origin =
+            new THREE.Vector3();
+
+        const direction =
+            new THREE.Vector3();
+
+        controller.matrixWorld.decompose(
+            origin,
+            new THREE.Quaternion(),
+            new THREE.Vector3()
+        );
+
+        direction
+            .set(0, 0, -1)
+            .applyQuaternion(
+                controller.quaternion
+            );
+
+        raycaster.set(
+            origin,
+            direction
+        );
+
+        const hits =
+            raycaster.intersectObjects(
+                exhibition.children,
+                true
+            );
+
+        if (hits.length > 0) {
+
+            const object =
+                hits[0].object;
+
+            if (
+                object.userData &&
+                object.userData.type === "station"
+            ) {
+
+                showInfo(
+                    object.userData.title,
+                    object.userData.text
+                );
+
+            }
+
+        }
+
+    }
+);
+
+
+/* =========================================================
+   INFORMATIONSPANEL
+   ========================================================= */
+
+const info =
+    document.getElementById("info");
+
+const infoTitle =
+    document.getElementById("infoTitle");
+
+const infoText =
+    document.getElementById("infoText");
+
+const close =
+    document.getElementById("close");
+
+
+function showInfo(title, text) {
+
+    infoTitle.textContent =
+        title;
+
+    infoText.textContent =
+        text;
+
+    info.classList.add(
+        "visible"
+    );
+}
+
+
+close.onclick = () => {
+
+    info.classList.remove(
+        "visible"
+    );
+
+};
+
+
+/* =========================================================
+   XR FRAME LOOP
+   ========================================================= */
+
+renderer.setAnimationLoop(
+    (timestamp, frame) => {
+
+        if (frame) {
+
+            const session =
+                renderer.xr.getSession();
+
+            const referenceSpace =
+                renderer.xr.getReferenceSpace();
+
+
+            /*
+                Hit-Test-Quelle anfordern
+            */
+
+            if (
+                !hitTestSourceRequested
+            ) {
+
+                session.requestReferenceSpace(
+                    "viewer"
+                ).then(
+                    viewerSpace => {
+
+                        session.requestHitTestSource({
+                            space: viewerSpace
+                        }).then(
+                            source => {
+
+                                hitTestSource =
+                                    source;
+
+                            }
+                        );
+
+                    }
+                );
+
+                session.addEventListener(
+                    "end",
+                    () => {
+
+                        hitTestSourceRequested =
+                            false;
+
+                        hitTestSource =
+                            null;
+
+                        reticle.visible =
+                            false;
+
+                        if (exhibition) {
+
+                            scene.remove(
+                                exhibition
+                            );
+
+                            exhibition =
+                                null;
+                        }
+
+                    }
+                );
+
+                hitTestSourceRequested =
+                    true;
+            }
+
+
+            /*
+                Fläche erkennen
+            */
+
+            if (hitTestSource) {
+
+                const hits =
+                    frame.getHitTestResults(
+                        hitTestSource
+                    );
+
+                if (hits.length > 0) {
+
+                    const hit =
+                        hits[0];
+
+                    const pose =
+                        hit.getPose(
+                            referenceSpace
+                        );
+
+                    reticle.visible =
+                        true;
+
+                    reticle.matrix
+                        .fromArray(
+                            pose.transform.matrix
+                        );
+
+                } else {
+
+                    reticle.visible =
+                        false;
+
+                }
+
+            }
+
+        }
+
+
+        /*
+            Stationen leicht schweben lassen
+        */
+
+        if (exhibition) {
+
+            exhibition.children
+                .forEach((object, index) => {
+
+                    if (
+                        object.userData &&
+                        object.userData.type ===
+                        "station"
+                    ) {
+
+                        const baseY =
+                            0.75;
+
+                        object.position.y =
+                            baseY +
+                            Math.sin(
+                                timestamp * 0.001 +
+                                index
+                            ) * 0.025;
+
+                    }
+
+                });
+
+        }
+
+
+        renderer.render(
+            scene,
+            camera
+        );
+
+    }
+);
+
+
+/* =========================================================
+   FENSTERGRÖSSE
+   ========================================================= */
+
+window.addEventListener(
+    "resize",
+    () => {
+
+        camera.aspect =
+            window.innerWidth /
+            window.innerHeight;
+
+        camera.updateProjectionMatrix();
+
+        renderer.setSize(
+            window.innerWidth,
+            window.innerHeight
+        );
+
+    }
+);
+
+</script>
+
+</body>
+</html>
