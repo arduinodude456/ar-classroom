@@ -1,68 +1,628 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="de">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>Geschichte erleben – AR Marker Test</title>
-<script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-<script src="https://raw.githack.com/AR-js-org/AR.js/3.4.8/aframe/build/aframe-ar.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover">
+
+<title>Geschichte erleben – Blaue Marker</title>
+
 <style>
-html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;font-family:system-ui,sans-serif}
-#start{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:#111}
-.card{max-width:420px;margin:20px;padding:26px;border-radius:22px;background:#fff;color:#111;text-align:center;box-shadow:0 12px 40px #0008}
-button{padding:15px 22px;border:0;border-radius:14px;background:#222;color:#fff;font-size:18px;font-weight:700}
-#status{margin-top:12px;color:#555;font-size:14px}
-#info{position:fixed;left:14px;right:14px;bottom:14px;z-index:9999;padding:16px;border-radius:16px;background:#111d;color:#fff;backdrop-filter:blur(8px);display:none}
+html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+    font-family: system-ui, sans-serif;
+}
+
+#video {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+#scan {
+    display: none;
+}
+
+#overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+}
+
+.marker {
+    position: absolute;
+    border: 5px solid white;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow:
+        0 0 18px #0088ff,
+        0 0 35px #0088ff;
+    pointer-events: auto;
+    box-sizing: border-box;
+}
+
+.card {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 5;
+
+    background: rgba(16, 21, 31, 0.95);
+    color: white;
+
+    padding: 24px;
+    border-radius: 20px;
+
+    width: min(330px, 80vw);
+    text-align: center;
+
+    box-shadow: 0 12px 45px rgba(0,0,0,.7);
+}
+
+button {
+    border: 0;
+    border-radius: 12px;
+    padding: 13px 18px;
+
+    font-size: 16px;
+    font-weight: 700;
+}
+
+#start {
+    background: #1677ee;
+    color: white;
+}
+
+#hint,
+#status {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+
+    z-index: 4;
+
+    background: rgba(0,0,0,.72);
+    color: white;
+
+    padding: 11px;
+    border-radius: 12px;
+
+    text-align: center;
+}
+
+#hint {
+    top: 12px;
+}
+
+#status {
+    bottom: 12px;
+    font-size: 14px;
+}
+
+.hidden {
+    display: none !important;
+}
 </style>
 </head>
-<body style="margin:0;overflow:hidden">
-<div id="start"><div class="card">
-<h1>🏛️ Geschichte erleben</h1>
-<p>Minimaler AR-Test mit <b>AR.js Marker Tracking</b>.</p>
-<p>Tippe auf Start und erlaube die Kamera. Danach halte den <b>Hiro-Marker</b> vor die Kamera.</p>
-<button id="go">Kamera & AR starten</button>
-<div id="status">Bereit</div>
-</div></div>
 
-<div id="info"><b>🏛️ ANTIKES OBJEKT</b><br>Der Marker wurde erkannt. Die AR-Basis funktioniert.</div>
+<body>
 
-<a-scene
-  embedded
-  vr-mode-ui="enabled:false"
-  renderer="antialias:true; alpha:true; precision:medium"
-  arjs="trackingMethod:best; sourceType:webcam; videoTexture:true; debugUIEnabled:false;">
-  <a-marker preset="hiro" id="marker" emitevents="true">
-    <a-cylinder position="0 0.12 0" radius="0.28" height="0.18" color="#777"></a-cylinder>
-    <a-cylinder position="0 0.52 0" radius="0.11" height="0.65" color="#d9c7a0"></a-cylinder>
-    <a-box position="0 0.87 0" width="0.34" height="0.12" depth="0.34" color="#d9c7a0"></a-box>
-    <a-plane position="0 1.05 0" rotation="-90 0 0" width="0.9" height="0.42" color="#202b38">
-      <a-text value="ANTIKE" align="center" color="#fff" width="2.5" position="0 0 0.01"></a-text>
-    </a-plane>
-  </a-marker>
-  <a-entity camera></a-entity>
-</a-scene>
+<video
+    id="video"
+    autoplay
+    playsinline
+    muted>
+</video>
+
+<canvas id="scan"></canvas>
+
+<div id="overlay"></div>
+
+
+<div id="startCard" class="card">
+
+    <h2>🔵 Blaue Marker</h2>
+
+    <p>
+        Richte die Kamera auf einen blauen Kreis.
+        Wird er erkannt, kannst du ihn antippen.
+    </p>
+
+    <button id="start">
+        Kamera starten
+    </button>
+
+</div>
+
+
+<div id="hint" class="hidden">
+    Suche nach blauen Kreisen …
+</div>
+
+<div id="status">
+    Bereit
+</div>
+
 
 <script>
-const start=document.getElementById('start');
-const go=document.getElementById('go');
-const status=document.getElementById('status');
-const info=document.getElementById('info');
-const marker=document.getElementById('marker');
-let started=false;
 
-go.addEventListener('click',()=>{
-  started=true;
-  start.style.display='none';
-  status.textContent='Kamera wird gestartet …';
-  setTimeout(()=>status.textContent='Kamera aktiv – Hiro-Marker suchen …',1500);
-});
-marker.addEventListener('markerFound',()=>{ if(started) info.style.display='block'; });
-marker.addEventListener('markerLost',()=>{ info.style.display='none'; });
-window.addEventListener('camera-init',()=>{ if(started) status.textContent='Kamera aktiv – Hiro-Marker suchen …'; });
-window.addEventListener('camera-error',(e)=>{
-  start.style.display='flex';
-  status.textContent='Kamerafehler: '+(e.detail?.error||'Kamera konnte nicht gestartet werden');
-});
+const video =
+    document.getElementById("video");
+
+const canvas =
+    document.getElementById("scan");
+
+const ctx =
+    canvas.getContext(
+        "2d",
+        { willReadFrequently: true }
+    );
+
+const overlay =
+    document.getElementById("overlay");
+
+const status =
+    document.getElementById("status");
+
+const hint =
+    document.getElementById("hint");
+
+const startCard =
+    document.getElementById("startCard");
+
+
+let stream = null;
+let running = false;
+let found = false;
+
+
+/*
+    KAMERA STARTEN
+*/
+
+document
+    .getElementById("start")
+    .onclick = async () => {
+
+    try {
+
+        if (!window.isSecureContext) {
+
+            throw new Error(
+                "Bitte die Datei über HTTPS öffnen."
+            );
+
+        }
+
+        stream =
+            await navigator
+                .mediaDevices
+                .getUserMedia({
+
+                    video: {
+                        facingMode: {
+                            ideal: "environment"
+                        }
+                    },
+
+                    audio: false
+
+                });
+
+
+        video.srcObject = stream;
+
+        await video.play();
+
+
+        startCard
+            .classList
+            .add("hidden");
+
+        hint
+            .classList
+            .remove("hidden");
+
+
+        running = true;
+
+
+        status.textContent =
+            "Kamera aktiv – suche blaue Kreise …";
+
+
+        requestAnimationFrame(scan);
+
+
+    } catch (e) {
+
+        status.textContent =
+            "Kamera-Fehler: " +
+            (e.name || "") +
+            " – " +
+            (e.message || e);
+
+    }
+
+};
+
+
+/*
+    BLAUE MARKER SUCHEN
+*/
+
+function scan() {
+
+    if (!running)
+        return;
+
+
+    if (
+        video.readyState >= 2 &&
+        video.videoWidth
+    ) {
+
+        /*
+            Kleines Analysebild erzeugen.
+            Dadurch muss nicht jedes Kamerapixel
+            verarbeitet werden.
+        */
+
+        const w = 320;
+
+        const h = Math.max(
+            180,
+            Math.round(
+                video.videoHeight *
+                w /
+                video.videoWidth
+            )
+        );
+
+
+        canvas.width = w;
+        canvas.height = h;
+
+
+        ctx.drawImage(
+            video,
+            0,
+            0,
+            w,
+            h
+        );
+
+
+        const data =
+            ctx.getImageData(
+                0,
+                0,
+                w,
+                h
+            ).data;
+
+
+        let minX = w;
+        let minY = h;
+
+        let maxX = -1;
+        let maxY = -1;
+
+        let count = 0;
+
+
+        /*
+            Blaue Pixel suchen
+        */
+
+        for (
+            let y = 0;
+            y < h;
+            y += 3
+        ) {
+
+            for (
+                let x = 0;
+                x < w;
+                x += 3
+            ) {
+
+                const i =
+                    (y * w + x) * 4;
+
+
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+
+
+                /*
+                    Blau-Erkennung
+
+                    Die Werte sind absichtlich
+                    relativ tolerant.
+                */
+
+                if (
+                    b > 115 &&
+                    b > r * 1.35 &&
+                    b > g * 1.12 &&
+                    b - r > 40
+                ) {
+
+                    minX =
+                        Math.min(
+                            minX,
+                            x
+                        );
+
+                    maxX =
+                        Math.max(
+                            maxX,
+                            x
+                        );
+
+                    minY =
+                        Math.min(
+                            minY,
+                            y
+                        );
+
+                    maxY =
+                        Math.max(
+                            maxY,
+                            y
+                        );
+
+                    count++;
+
+                }
+
+            }
+
+        }
+
+
+        const bw =
+            maxX - minX;
+
+        const bh =
+            maxY - minY;
+
+        const area =
+            bw * bh;
+
+
+        const ratio =
+            bh > 0
+                ? bw / bh
+                : 0;
+
+
+        /*
+            Prüfen, ob die blaue Fläche
+            ungefähr kreisförmig/quadratisch
+            und groß genug ist.
+        */
+
+        if (
+            count > 70 &&
+            area > 3000 &&
+            ratio > 0.55 &&
+            ratio < 1.8
+        ) {
+
+            const x =
+                ((minX + maxX) / 2) /
+                w *
+                innerWidth;
+
+
+            const y =
+                ((minY + maxY) / 2) /
+                h *
+                innerHeight;
+
+
+            const size =
+                Math.max(
+                    55,
+                    Math.min(
+                        150,
+                        Math.max(
+                            bw / w * innerWidth,
+                            bh / h * innerHeight
+                        )
+                    )
+                );
+
+
+            showMarker(
+                x,
+                y,
+                size
+            );
+
+
+            found = true;
+
+
+            status.textContent =
+                "🔵 Blauer Marker erkannt";
+
+            hint.textContent =
+                "Marker erkannt – antippen";
+
+
+        } else {
+
+            removeMarker();
+
+
+            if (found) {
+
+                status.textContent =
+                    "Suche nach blauen Kreisen …";
+
+            }
+
+
+            found = false;
+
+
+            hint.textContent =
+                "Suche nach blauen Kreisen …";
+
+        }
+
+    }
+
+
+    requestAnimationFrame(scan);
+
+}
+
+
+/*
+    ERKANNTEN MARKER ANZEIGEN
+*/
+
+function showMarker(
+    x,
+    y,
+    size
+) {
+
+    removeMarker();
+
+
+    const marker =
+        document.createElement("div");
+
+
+    marker.className =
+        "marker";
+
+
+    marker.style.left =
+        x + "px";
+
+    marker.style.top =
+        y + "px";
+
+
+    marker.style.width =
+        size + "px";
+
+    marker.style.height =
+        size + "px";
+
+
+    /*
+        Wenn der Marker angetippt wird
+    */
+
+    marker.onclick = () => {
+
+        const card =
+            document.createElement("div");
+
+
+        card.className =
+            "card";
+
+
+        card.innerHTML = `
+
+            <h2>
+                🏛️ Historischer Punkt
+            </h2>
+
+            <p>
+                Das ist ein erkannter
+                blauer Marker.
+            </p>
+
+            <p>
+                Hier können später
+                historische Informationen,
+                Bilder, Quellen und
+                Aufgaben erscheinen.
+            </p>
+
+            <button>
+                Schließen
+            </button>
+
+        `;
+
+
+        card
+            .querySelector("button")
+            .onclick = () => {
+
+                card.remove();
+
+            };
+
+
+        document.body
+            .appendChild(card);
+
+    };
+
+
+    overlay
+        .appendChild(marker);
+
+}
+
+
+/*
+    MARKER ENTFERNEN
+*/
+
+function removeMarker() {
+
+    overlay
+        .querySelectorAll(".marker")
+        .forEach(
+            element => element.remove()
+        );
+
+}
+
+
+/*
+    KAMERA BEIM VERLASSEN DER SEITE
+    STOPPEN
+*/
+
+window.addEventListener(
+    "beforeunload",
+    () => {
+
+        if (stream) {
+
+            stream
+                .getTracks()
+                .forEach(
+                    track => track.stop()
+                );
+
+        }
+
+    }
+);
+
 </script>
+
 </body>
 </html>
